@@ -22,7 +22,7 @@ metadata:
 spec:
   sourceType: grpc
   # replace this with your index image
-  image: quay.io/gnufied/gnufied-index:1.0.0
+  image: quay.io/rbednar/test:index
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
