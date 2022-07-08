@@ -79,6 +79,7 @@ func (r *DeleteReconciler) Reconcile(ctx context.Context, request ctrl.Request) 
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		r.runtimeConfig.Name = common.GetProvisionedByValue(*r.runtimeConfig.Node)
 		klog.InfoS("first run, initializing PV cache", "provisionerName", r.runtimeConfig.Name)
 		pvList := &corev1.PersistentVolumeList{}
 		err := r.Client.List(context.TODO(), pvList)
@@ -91,6 +92,10 @@ func (r *DeleteReconciler) Reconcile(ctx context.Context, request ctrl.Request) 
 			if !common.PVMatchesNode(pv, r.runtimeConfig.Node) {
 				continue
 			}
+			//name, found := pv.Annotations[provCommon.AnnProvisionedBy]
+			//if !found || name != r.runtimeConfig.Name {
+			//	continue
+			//}
 			addOrUpdatePV(r.runtimeConfig, pv)
 		}
 
@@ -188,7 +193,9 @@ func handlePVChange(runtimeConfig *provCommon.RuntimeConfig, pv *corev1.Persiste
 		return
 	}
 	// skip non-owned PVs
-	if !common.PVMatchesNode(*pv, runtimeConfig.Node) {
+	annotations := pv.GetAnnotations()
+	name, found := annotations[provCommon.AnnProvisionedBy]
+	if !found || name != runtimeConfig.Name {
 		return
 	}
 	// enqueue only if the provisioner name matches,
@@ -205,7 +212,7 @@ func handlePVChange(runtimeConfig *provCommon.RuntimeConfig, pv *corev1.Persiste
 	}
 
 	// enqueue owner
-	_, found := pv.Labels[common.PVOwnerNameLabel]
+	_, found = pv.Labels[common.PVOwnerNameLabel]
 	if !found {
 		return
 	}

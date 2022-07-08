@@ -95,11 +95,15 @@ func GetProvisionedByValue(node corev1.Node) string {
 
 func PVMatchesNode(pv corev1.PersistentVolume, node *corev1.Node) bool {
 	PVAnnotation, found := pv.Annotations[provCommon.AnnProvisionedBy]
+	if !found {
+		klog.InfoS("PV annotation not found - skipping.", "pvName", pv.GetName(), "nodeName", node.GetName())
+		return false
+	}
 
 	// Check if there is an exact match.
 	name := GetProvisionedByValue(*node)
-	if name == PVAnnotation && found {
-		klog.InfoS("PV was provisioned by this node.", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName())
+	if name == PVAnnotation {
+		klog.InfoS("PV matches node.", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName())
 		return true
 	}
 
@@ -111,10 +115,10 @@ func PVMatchesNode(pv corev1.PersistentVolume, node *corev1.Node) bool {
 	startsWithRuntimeName := startsWithRuntimeNameReg.Find([]byte(PVAnnotation))
 
 	if endsWithUID != nil && startsWithRuntimeName != nil {
-		klog.InfoS("PV was provisioned by this node (UID is ignored).", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName(), "UID", endsWithUID)
+		klog.InfoS("PV matches node (UID is ignored).", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName(), "UID", endsWithUID)
 		return true
 	}
 
-	klog.InfoS("PV was not provisioned by this node - skipping.", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName(), "UID", endsWithUID)
+	klog.InfoS("PV does not match node - skipping.", "pvName", pv.GetName(), "pvAnnotation", PVAnnotation, "nodeName", node.GetName(), "UID", endsWithUID)
 	return false
 }

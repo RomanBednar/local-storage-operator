@@ -280,7 +280,8 @@ func (r *LocalVolumeReconciler) Reconcile(ctx context.Context, request ctrl.Requ
 		}
 		for _, pv := range pvList.Items {
 			// skip non-owned PVs
-			if !common.PVMatchesNode(pv, r.runtimeConfig.Node) {
+			name, found := pv.Annotations[provCommon.AnnProvisionedBy]
+			if !found || name != r.runtimeConfig.Name {
 				continue
 			}
 			addOrUpdatePV(r.runtimeConfig, pv)
@@ -731,7 +732,8 @@ func (r *LocalVolumeReconciler) SetupWithManager(mgr ctrl.Manager, cleanupTracke
 
 func handlePVChange(runtimeConfig *provCommon.RuntimeConfig, pv *corev1.PersistentVolume, q workqueue.RateLimitingInterface, isDelete bool) {
 	// skip non-owned PVs
-	if !common.PVMatchesNode(*pv, runtimeConfig.Node) {
+	name, found := pv.Annotations[provCommon.AnnProvisionedBy]
+	if !found || name != runtimeConfig.Name {
 		return
 	}
 

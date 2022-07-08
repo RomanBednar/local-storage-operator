@@ -70,9 +70,11 @@ func NewDeleter(config *common.RuntimeConfig, cleanupTracker *CleanupStatusTrack
 func (d *Deleter) DeletePVs() {
 	for _, pv := range d.Cache.ListPVs() {
 		if pv.Status.Phase != v1.VolumeReleased {
+			klog.InfoS("PV NOT RELEASED")
 			continue
 		}
 		if d.Cache.SuccessfullyCleanedPV(pv) {
+			klog.InfoS("ALREADY CLEANED")
 			continue
 		}
 		name := pv.Name
@@ -162,6 +164,8 @@ func (d *Deleter) deletePV(pv *v1.PersistentVolume) error {
 		return err
 	}
 
+	klog.InfoS("STATE:", "state", state)
+
 	switch state {
 	case CSSucceeded:
 		// Found a completed cleaning entry
@@ -171,8 +175,9 @@ func (d *Deleter) deletePV(pv *v1.PersistentVolume) error {
 			if !errors.IsNotFound(err) {
 				d.RuntimeConfig.Recorder.Eventf(pv, v1.EventTypeWarning, common.EventVolumeFailedDelete,
 					err.Error())
-				return fmt.Errorf("Error deleting PV %q: %v", pv.Name, err.Error())
+				//return fmt.Errorf("Error deleting PV %q: %v", pv.Name, err.Error())
 			}
+			return fmt.Errorf("Error deleting PV %q: %v", pv.Name, err.Error())
 		}
 		mode := string(volMode)
 		deleteType := metrics.DeleteTypeProcess
