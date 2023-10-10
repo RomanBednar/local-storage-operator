@@ -2,7 +2,6 @@ package lv
 
 import (
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/openshift/local-storage-operator/internal"
 
 	localv1 "github.com/openshift/local-storage-operator/api/v1"
+	"github.com/openshift/local-storage-operator/test-framework/testutils"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -251,11 +251,12 @@ func TestWipeDeviceWhenCreateSymLinkByDeviceName(t *testing.T) {
 
 	for i := range tests {
 		test := tests[i]
+		volHelper := util.NewVolumeHelper()
 		t.Run(test.name, func(t *testing.T) {
 			tmpSymLinkTargetDir := createTmpDir(t, "", "target")
 			fakeDisk := createTmpFile(t, "", "diskName", tinyFile)
 			fname := fakeDisk.Name()
-			formatAsExt4(t, fname)
+			volHelper.FormatAsExt4(t, fname)
 			defer os.Remove(fname)
 			defer os.RemoveAll(tmpSymLinkTargetDir)
 
@@ -284,7 +285,7 @@ func TestWipeDeviceWhenCreateSymLinkByDeviceName(t *testing.T) {
 			assert.Truef(t, hasFile(t, tmpSymLinkTargetDir, "diskName"), "failed to find symlink with disk name in %s directory", tmpSymLinkTargetDir)
 
 			// assert that disk was (or wasn't) wiped
-			assert.Truef(t, hasExt4(fname) != test.forceWipe, "unexpected wiping disk %s", fname)
+			assert.Truef(t, volHelper.HasExt4(fname) != test.forceWipe, "unexpected wiping disk %s", fname)
 		})
 	}
 }
@@ -377,19 +378,6 @@ func hasFile(t *testing.T, dir, file string) bool {
 		}
 	}
 	return false
-}
-
-func formatAsExt4(t *testing.T, fname string) {
-	cmd := exec.Command("mkfs.ext4", fname)
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("error formatting file: %v; command error: %v", fname, cmd.Err)
-	}
-}
-
-func hasExt4(fname string) bool {
-	cmd := exec.Command("fsck.ext4", "-n", fname)
-	return cmd.Run() == nil
 }
 
 type testContext struct {
