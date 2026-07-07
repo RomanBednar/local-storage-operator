@@ -35,6 +35,25 @@ var (
 	lvStorageClassName = "test-local-sc"
 )
 
+// Disk indices on node 0. diskIndexSharedByID is used by the by-id reproducer on
+// both nodes and ext4 fsType reuses node-0 diskIndexSharedByID after that phase
+const (
+	diskIndexDefaultFsType = 0
+	diskIndexSharedByID    = 1
+	diskIndexXfsFsType     = 2
+	diskIndexBlockMode     = 3
+	diskIndexLVDL          = 4
+)
+
+type fsTypeTestCase struct {
+	name             string
+	fsType           string
+	volumeMode       localv1.PersistentVolumeMode
+	storageClassName string
+	diskIndex        int
+	withTolerations  bool
+}
+
 var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 	var (
 		f            *framework.Framework
@@ -53,9 +72,11 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "listing worker nodes")
 		Expect(len(nodeList.Items)).To(BeNumerically(">=", 3), "expected at least 3 worker nodes")
 
+		// Disk sizes must be unique per node for discovery matching.
 		nodeEnv = []nodeDisks{
 			{
-				disks: []disk{{size: 10}, {size: 20}},
+				// diskIndexDefaultFsType, diskIndexSharedByID, diskIndexXfsFsType, diskIndexBlockMode, diskIndexLVDL
+				disks: []disk{{size: 10}, {size: 20}, {size: 30}, {size: 40}, {size: 15}},
 				node:  nodeList.Items[0],
 			},
 			{
@@ -79,9 +100,6 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 		createAndAttachAWSVolumes(ec2Client, namespace, nodeEnv)
 
 		nodeEnv = populateDeviceInfo(namespace, nodeEnv)
-
-		selectedDisk = nodeEnv[0].disks[0]
-		Expect(selectedDisk.path).ShouldNot(BeZero(), "device path should not be empty")
 	})
 
 	Context("duplicate by-id cache reproducer", Ordered, func() {
@@ -94,9 +112,9 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 				nodeEnv:   nodeEnv,
 			}
 
-			sharedSelectedDisk := nodeEnv[0].disks[1]
+			sharedSelectedDisk := nodeEnv[0].disks[diskIndexSharedByID]
 			Expect(sharedSelectedDisk.path).ShouldNot(BeZero(), "shared selected device path should not be empty")
-			sharedAliasDisk := nodeEnv[1].disks[1]
+			sharedAliasDisk := nodeEnv[1].disks[diskIndexSharedByID]
 			Expect(sharedAliasDisk.path).ShouldNot(BeZero(), "shared alias device path should not be empty")
 
 			tc.addHostSymlink(nodeEnv[0].node.Labels[corev1.LabelHostname], currentSymlinkForDisk(sharedSelectedDisk), sharedScsi8Link)
@@ -172,15 +190,122 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 		})
 	})
 
+	Context("fsType and volumeMode", func() {
+		var fsTypeTestCases = []fsTypeTestCase{
+			{
+				name:             "default-filesystem-with-tolerations",
+				volumeMode:       localv1.PersistentVolumeFilesystem,
+				storageClassName: lvStorageClassName,
+				diskIndex:        diskIndexDefaultFsType,
+				withTolerations:  true,
+			},
+			{
+				name:             "ext4-filesystem",
+				fsType:           "ext4",
+				volumeMode:       localv1.PersistentVolumeFilesystem,
+				storageClassName: "test-local-sc-ext4",
+				diskIndex:        diskIndexSharedByID,
+			},
+			{
+				name:             "xfs-filesystem",
+				fsType:           "xfs",
+				volumeMode:       localv1.PersistentVolumeFilesystem,
+				storageClassName: "test-local-sc-xfs",
+				diskIndex:        diskIndexXfsFsType,
+			},
+			{
+				name:             "block-mode",
+				volumeMode:       localv1.PersistentVolumeBlock,
+				storageClassName: "test-local-sc-block",
+				diskIndex:        diskIndexBlockMode,
+			},
+		}
+		for _, tc := range fsTypeTestCases {
+			tc := tc
+			It(tc.name, func() {
+				selectedNode := nodeEnv[0].node
+				testDisk := nodeEnv[0].disks[tc.diskIndex]
+				Expect(testDisk.path).ShouldNot(BeZero(), "device path should not be empty for %s", tc.name)
+
+				var localVolume *localv1.LocalVolume
+				if tc.withTolerations {
+					localVolume = getLocalVolume(selectedNode, testDisk.path, namespace)
+				} else {
+					localVolume = getLocalVolumeWithFSType(selectedNode, testDisk.path, namespace, tc.storageClassName, tc.fsType, tc.volumeMode, "", nil)
+				}
+
+				DeferCleanup(func() { cleanupLVResources(f, localVolume) })
+
+				Eventually(func(ctx context.Context) error {
+					f.Logf("creating localvolume %s with fsType=%q, volumeMode=%s", tc.name, tc.fsType, tc.volumeMode)
+					return f.Client.Create(ctx, localVolume, nil)
+				}, time.Minute, time.Second*2).WithContext(context.Background()).ShouldNot(HaveOccurred(), "creating localvolume %s", tc.name)
+
+				err := waitForDaemonSet(f.KubeClient, namespace, nodedaemon.DiskMakerName, retryInterval, hourTimeout)
+				Expect(err).NotTo(HaveOccurred(), "waiting for diskmaker daemonset for %s", tc.name)
+
+				err = verifyLocalVolume(localVolume, f.Client)
+				Expect(err).NotTo(HaveOccurred(), "verifying localvolume cr for %s", tc.name)
+
+				err = checkLocalVolumeStatus(localVolume)
+				Expect(err).NotTo(HaveOccurred(), "checking localvolume condition for %s", tc.name)
+
+				pvs := eventuallyFindPVs(f, tc.storageClassName, 1)
+				Expect(pvs).NotTo(BeEmpty(), "no pvs returned by eventuallyFindPVs for %s", tc.name)
+
+				// Verify the PV path matches the disk name or ID
+				expectedPath := testDisk.name
+				if testDisk.id != "" {
+					expectedPath = testDisk.id
+				}
+				Expect(filepath.Base(pvs[0].Spec.Local.Path)).To(Equal(expectedPath))
+
+				pv := pvs[0]
+				f.Logf("Verifying PV %s for test case %s", pv.Name, tc.name)
+				if tc.volumeMode == localv1.PersistentVolumeBlock {
+					Expect(pv.Spec.VolumeMode).NotTo(BeNil())
+					Expect(*pv.Spec.VolumeMode).To(Equal(corev1.PersistentVolumeBlock))
+					f.Logf("verified PV %s has volumeMode=Block", pv.Name)
+				} else if tc.fsType != "" {
+					Expect(pv.Spec.Local.FSType).NotTo(BeNil())
+					Expect(*pv.Spec.Local.FSType).To(Equal(tc.fsType))
+					f.Logf("verified PV %s has fsType=%s", pv.Name, tc.fsType)
+				}
+
+				_, err = f.KubeClient.StorageV1().StorageClasses().Get(context.TODO(), tc.storageClassName, metav1.GetOptions{})
+				Expect(err).NotTo(HaveOccurred(), "getting storage class %s", tc.storageClassName)
+				f.Logf("Verified storage class %s exists", tc.storageClassName)
+
+				for i := range pvs {
+					eventuallyDeletePV(&pvs[i])
+				}
+				pvs = eventuallyFindPVs(f, tc.storageClassName, 1)
+
+				consumingObjectList := make([]client.Object, 0)
+				for _, pv := range pvs {
+					pvc, job, pod := consumePV(namespace, pv)
+					consumingObjectList = append(consumingObjectList, job, pvc, pod)
+				}
+				eventuallyDelete(consumingObjectList...)
+				eventuallyFindAvailablePVs(f, tc.storageClassName, pvs)
+			})
+		}
+	})
+
 	Context("standard LocalVolume lifecycle", Ordered, func() {
 		var tc *testContext
 
 		BeforeAll(func() {
+			Expect(len(nodeEnv[0].disks)).To(BeNumerically(">", diskIndexLVDL), "expected at least %d disks on node 0", diskIndexLVDL+1)
+
 			tc = &testContext{
 				f:         f,
 				namespace: namespace,
 				nodeEnv:   nodeEnv,
 			}
+
+			selectedDisk = nodeEnv[0].disks[diskIndexLVDL]
+			Expect(selectedDisk.path).ShouldNot(BeZero(), "device path should not be empty")
 
 			selectedNode := nodeEnv[0].node
 			tc.localVolume = getLocalVolume(selectedNode, selectedDisk.path, namespace)
@@ -659,13 +784,55 @@ func waitForNodeTaintUpdate(kubeclient kubernetes.Interface, node corev1.Node, r
 }
 
 func getLocalVolume(selectedNode corev1.Node, selectedDisk, namespace string) *localv1.LocalVolume {
+	return getLocalVolumeWithFSType(
+		selectedNode,
+		selectedDisk,
+		namespace,
+		lvStorageClassName,
+		"",
+		localv1.PersistentVolumeFilesystem,
+		"test-local-disk",
+		[]corev1.Toleration{
+			{
+				Key:      "localstorage",
+				Value:    "testvalue",
+				Operator: "Equal",
+			},
+		},
+	)
+}
+
+// getLocalVolumeWithFSType creates a LocalVolume CR with specific FSType and VolumeMode
+// Parameters:
+//   - selectedNode: the node to deploy on
+//   - selectedDisk: the disk device path
+//   - namespace: the namespace for the LocalVolume
+//   - storageClassName: the storage class name
+//   - fsType: filesystem type (ext4, xfs, or empty string for block mode)
+//   - volumeMode: PersistentVolumeFilesystem or PersistentVolumeBlock
+//   - name: the name of the LocalVolume CR (if empty, generates from storageClassName)
+//   - tolerations: tolerations to apply (can be nil)
+func getLocalVolumeWithFSType(selectedNode corev1.Node, selectedDisk, namespace, storageClassName, fsType string, volumeMode localv1.PersistentVolumeMode, name string, tolerations []corev1.Toleration) *localv1.LocalVolume {
+	if name == "" {
+		name = fmt.Sprintf("test-local-disk-%s", storageClassName)
+	}
+
+	scd := localv1.StorageClassDevice{
+		StorageClassName: storageClassName,
+		DevicePaths:      []string{selectedDisk},
+		VolumeMode:       volumeMode,
+	}
+	if volumeMode != localv1.PersistentVolumeBlock && fsType != "" {
+		scd.FSType = fsType
+	}
+
 	return &localv1.LocalVolume{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "LocalVolume",
 			APIVersion: localv1.GroupVersion.String(),
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-local-disk",
+			Name:      name,
 			Namespace: namespace,
 		},
 		Spec: localv1.LocalVolumeSpec{
@@ -678,19 +845,8 @@ func getLocalVolume(selectedNode corev1.Node, selectedDisk, namespace string) *l
 					},
 				},
 			},
-			Tolerations: []corev1.Toleration{
-				{
-					Key:      "localstorage",
-					Value:    "testvalue",
-					Operator: "Equal",
-				},
-			},
-			StorageClassDevices: []localv1.StorageClassDevice{
-				{
-					StorageClassName: lvStorageClassName,
-					DevicePaths:      []string{selectedDisk},
-				},
-			},
+			Tolerations:         tolerations,
+			StorageClassDevices: []localv1.StorageClassDevice{scd},
 		},
 	}
 }
