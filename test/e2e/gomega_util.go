@@ -172,6 +172,10 @@ func eventuallyFindAvailablePVs(f *framework.Framework, storageClassName string,
 }
 
 func consumePV(namespace string, pv corev1.PersistentVolume) (*corev1.PersistentVolumeClaim, *batchv1.Job, *corev1.Pod) {
+	return consumePVWithTolerations(namespace, pv, nil)
+}
+
+func consumePVWithTolerations(namespace string, pv corev1.PersistentVolume, tolerations []corev1.Toleration) (*corev1.PersistentVolumeClaim, *batchv1.Job, *corev1.Pod) {
 	f := framework.Global
 	f.Logf("consuming PV: %q", pv.Name)
 	name := fmt.Sprintf("%s-consumer", pv.ObjectMeta.Name)
@@ -211,6 +215,7 @@ func consumePV(namespace string, pv corev1.PersistentVolume) (*corev1.Persistent
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					Tolerations:   tolerations,
 					Containers: []corev1.Container{
 						{
 							Name:    "busybox",
