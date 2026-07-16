@@ -43,6 +43,7 @@ const (
 	diskIndexXfsFsType     = 2
 	diskIndexBlockMode     = 3
 	diskIndexLVDL          = 4
+	diskIndexTolerations   = 0
 )
 
 type fsTypeTestCase struct {
@@ -290,6 +291,65 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 				eventuallyFindAvailablePVs(f, tc.storageClassName, pvs)
 			})
 		}
+	})
+
+	Context("localvolume with tolerations", func() {
+		It("schedules and consumes PV on tainted node", func() {
+			selectedNode := nodeEnv[1].node
+			testDisk := nodeEnv[1].disks[diskIndexTolerations]
+			Expect(testDisk.path).ShouldNot(BeZero(), "device path should not be empty for tolerations test")
+
+			originalNodeTaints := append([]corev1.Taint(nil), selectedNode.Spec.Taints...)
+			selectedNode.Spec.Taints = []corev1.Taint{localVolumeNodeTaint()}
+			var err error
+			selectedNode, err = waitForNodeTaintUpdate(f.KubeClient, selectedNode, retryInterval, hourTimeout)
+			Expect(err).NotTo(HaveOccurred(), "tainting node for tolerations test")
+			DeferCleanup(func() error {
+				selectedNode.Spec.Taints = originalNodeTaints
+				_, restoreErr := waitForNodeTaintUpdate(f.KubeClient, selectedNode, retryInterval, hourTimeout)
+				if restoreErr != nil {
+					f.Logf("error restoring original taints on node: %v", restoreErr)
+				}
+				return restoreErr
+			})
+
+			localVolume := getLocalVolumeWithFSType(
+				selectedNode,
+				testDisk.path,
+				namespace,
+				lvStorageClassName,
+				"ext4",
+				localv1.PersistentVolumeFilesystem,
+				"test-local-disk-tolerations",
+				localVolumeTolerations(),
+			)
+			DeferCleanup(func() { cleanupLVResources(f, localVolume) })
+
+			Eventually(func(ctx context.Context) error {
+				f.Logf("creating localvolume for tolerations test")
+				return f.Client.Create(ctx, localVolume, nil)
+			}, time.Minute, time.Second*2).WithContext(context.Background()).ShouldNot(HaveOccurred(), "creating localvolume for tolerations test")
+
+			err = waitForDaemonSet(f.KubeClient, namespace, nodedaemon.DiskMakerName, retryInterval, hourTimeout)
+			Expect(err).NotTo(HaveOccurred(), "waiting for diskmaker daemonset for tolerations test")
+
+			err = verifyLocalVolume(localVolume, f.Client)
+			Expect(err).NotTo(HaveOccurred(), "verifying localvolume cr for tolerations test")
+
+			err = checkLocalVolumeStatus(localVolume)
+			Expect(err).NotTo(HaveOccurred(), "checking localvolume condition for tolerations test")
+
+			pvs := eventuallyFindPVs(f, lvStorageClassName, 1)
+			expectedPath := testDisk.name
+			if testDisk.id != "" {
+				expectedPath = testDisk.id
+			}
+			Expect(filepath.Base(pvs[0].Spec.Local.Path)).To(Equal(expectedPath))
+
+			f.Logf("consuming PV with tolerations")
+			pvc, job, pod := consumePVWithTolerations(namespace, pvs[0], localVolumeTolerations())
+			eventuallyDelete(job, pvc, pod)
+		})
 	})
 
 	Context("standard LocalVolume lifecycle", Ordered, func() {
@@ -792,14 +852,26 @@ func getLocalVolume(selectedNode corev1.Node, selectedDisk, namespace string) *l
 		"",
 		localv1.PersistentVolumeFilesystem,
 		"test-local-disk",
-		[]corev1.Toleration{
-			{
-				Key:      "localstorage",
-				Value:    "testvalue",
-				Operator: "Equal",
-			},
-		},
+		localVolumeTolerations(),
 	)
+}
+
+func localVolumeTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Key:      "localstorage",
+			Value:    "testvalue",
+			Operator: corev1.TolerationOpEqual,
+		},
+	}
+}
+
+func localVolumeNodeTaint() corev1.Taint {
+	return corev1.Taint{
+		Key:    "localstorage",
+		Value:  "testvalue",
+		Effect: corev1.TaintEffectNoSchedule,
+	}
 }
 
 // getLocalVolumeWithFSType creates a LocalVolume CR with specific FSType and VolumeMode
