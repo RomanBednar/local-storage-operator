@@ -528,6 +528,72 @@ var _ = Describe("LocalVolumeSet", Label("LocalVolumeSet"), Ordered, func() {
 			eventuallyFindAvailablePVs(f, tc.lvset.Spec.StorageClassName, tc.pvs)
 		})
 	})
+
+	Context("symlink restoration after wipe", Ordered, func() {
+		var tc *testContext
+
+		BeforeAll(func() {
+			tc = &testContext{
+				f:         f,
+				namespace: namespace,
+				nodeEnv:   nodeEnv,
+			}
+
+			sixtyGi := resource.MustParse("60G")
+			eightyGi := resource.MustParse("80G")
+			tc.lvset = &localv1alpha1.LocalVolumeSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "wipe-test-fs",
+					Namespace: namespace,
+				},
+				Spec: localv1alpha1.LocalVolumeSetSpec{
+					StorageClassName: "wipe-test-fs",
+					VolumeMode:       localv1.PersistentVolumeFilesystem,
+					NodeSelector: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      corev1.LabelHostname,
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{nodeEnv[0].node.ObjectMeta.Labels[corev1.LabelHostname]},
+								},
+							},
+						},
+					}},
+					DeviceInclusionSpec: &localv1alpha1.DeviceInclusionSpec{
+						DeviceTypes: []localv1alpha1.DeviceType{localv1alpha1.RawDisk},
+						MinSize:     &sixtyGi,
+						MaxSize:     &eightyGi,
+					},
+				},
+			}
+			tc.lvSets = append(tc.lvSets, tc.lvset)
+
+			f.Logf("creating localvolumeset for wipe test %q", tc.lvset.GetName())
+			err := f.Client.Create(context.TODO(), tc.lvset, nil)
+			Expect(err).NotTo(HaveOccurred(), "create localvolumeset for wipe test")
+
+			DeferCleanup(func() { tc.Cleanup() })
+		})
+
+		It("restores symlink when device has no filesystem signature", func() {
+			tc.pvs = eventuallyFindPVs(f, tc.lvset.Spec.StorageClassName, 1)
+			Expect(tc.pvs).To(HaveLen(1))
+
+			lvdl := eventuallyGetLVDL(f, namespace, tc.pvs[0].Name)
+			lvdl = updateLVDLPolicy(f, lvdl, localv1.DeviceLinkPolicyPreferredLinkTarget)
+			waitForLVDLLinkTargets(f, lvdl, lvdl.Status.PreferredLinkTarget, lvdl.Status.PreferredLinkTarget)
+
+			f.Logf("TEST: symlink restoration after wipe with no filesystem signature for lvset")
+			tc.pvs[0] = verifySymlinkRestorationAfterWipeNoFSSignature(tc, tc.pvs[0])
+		})
+
+		It("restores symlink when device has a filesystem signature", func() {
+			Expect(tc.pvs).To(HaveLen(1))
+			f.Logf("TEST: symlink restoration after wipe with filesystem signature for lvset (rejected-device path)")
+			tc.pvs[0] = verifySymlinkRestorationAfterWipeWithFSSignature(tc, tc.pvs[0])
+		})
+	})
 })
 
 func waitForLVSetAndOwnedPVsToDisappear(lvset *localv1alpha1.LocalVolumeSet) {

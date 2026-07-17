@@ -509,6 +509,52 @@ var _ = Describe("LocalVolume", Label("LocalVolume"), Ordered, func() {
 			checkForSymlinks(namespace, nodeEnv, symLinkPath)
 		})
 	})
+
+	Context("symlink restoration after wipe", Ordered, func() {
+		var tc *testContext
+
+		BeforeAll(func() {
+			tc = &testContext{
+				f:         f,
+				namespace: namespace,
+				nodeEnv:   nodeEnv,
+			}
+
+			selectedNode := nodeEnv[0].node
+			tc.localVolume = getLocalVolume(selectedNode, selectedDisk.path, namespace)
+			tc.localVolume.Name = "test-local-disk-wipe"
+			tc.localVolume.Spec.StorageClassDevices[0].StorageClassName = "test-local-sc-wipe"
+			tc.localVolume.Spec.StorageClassDevices[0].VolumeMode = localv1.PersistentVolumeFilesystem
+
+			Eventually(func(ctx context.Context) error {
+				f.Logf("creating localvolume for wipe test")
+				return f.Client.Create(ctx, tc.localVolume, nil)
+			}, time.Minute, time.Second*2).WithContext(context.Background()).ShouldNot(HaveOccurred(), "creating localvolume for wipe test")
+
+			DeferCleanup(func() { tc.Cleanup() })
+		})
+
+		It("restores symlink when device has no filesystem signature", func() {
+			err := waitForDaemonSet(f.KubeClient, namespace, nodedaemon.DiskMakerName, retryInterval, hourTimeout)
+			Expect(err).NotTo(HaveOccurred(), "waiting for diskmaker daemonset")
+
+			tc.pvs = eventuallyFindPVs(f, tc.localVolume.Spec.StorageClassDevices[0].StorageClassName, 1)
+			Expect(tc.pvs).To(HaveLen(1))
+
+			lvdl := eventuallyGetLVDL(f, namespace, tc.pvs[0].Name)
+			lvdl = updateLVDLPolicy(f, lvdl, localv1.DeviceLinkPolicyPreferredLinkTarget)
+			waitForLVDLLinkTargets(f, lvdl, lvdl.Status.PreferredLinkTarget, lvdl.Status.PreferredLinkTarget)
+
+			f.Logf("TEST: symlink restoration after wipe with no filesystem signature")
+			tc.pvs[0] = verifySymlinkRestorationAfterWipeNoFSSignature(tc, tc.pvs[0])
+		})
+
+		It("restores symlink when device has a filesystem signature", func() {
+			Expect(tc.pvs).To(HaveLen(1))
+			f.Logf("TEST: symlink restoration after wipe with filesystem signature (rejected-device path)")
+			tc.pvs[0] = verifySymlinkRestorationAfterWipeWithFSSignature(tc, tc.pvs[0])
+		})
+	})
 })
 
 // --- Helper functions ---
