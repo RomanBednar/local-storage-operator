@@ -302,6 +302,14 @@ spec:
                 - deployments/finalizers
               verbs:
                 - update
+            - apiGroups:
+                - networking.k8s.io
+              resources:
+                - networkpolicies
+              verbs:
+                - create
+                - delete
+                - update
           serviceAccountName: local-storage-operator
         - rules:
             - apiGroups:
