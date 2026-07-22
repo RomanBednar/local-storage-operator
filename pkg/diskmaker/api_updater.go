@@ -88,7 +88,7 @@ func (s *sdkAPIUpdater) recordEvent(obj runtime.Object, e *DiskEvent) {
 		message = fmt.Sprintf("%s - %s", nodeName, message)
 	}
 
-	s.recorder.Eventf(obj, e.EventType, e.EventReason, message)
+	s.recorder.Eventf(obj, e.EventType, e.EventReason, "%s", message)
 }
 
 func (s *sdkAPIUpdater) getLocalVolume(lv *localv1.LocalVolume) (*localv1.LocalVolume, error) {

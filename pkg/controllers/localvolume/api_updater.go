@@ -99,7 +99,7 @@ func (s *sdkAPIUpdater) listPersistentVolumes(listOptions metav1.ListOptions) (*
 }
 
 func (s *sdkAPIUpdater) recordEvent(lv *localv1.LocalVolume, eventType, reason, messageFmt string, args ...interface{}) {
-	s.recorder.Eventf(lv, eventType, reason, messageFmt)
+	s.recorder.Eventf(lv, eventType, reason, "%s", messageFmt)
 }
 
 func (s *sdkAPIUpdater) apiContext() (goctx.Context, goctx.CancelFunc) {
