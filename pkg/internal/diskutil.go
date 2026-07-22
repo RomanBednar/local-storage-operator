@@ -566,7 +566,7 @@ func (e *ExclusiveFileLock) Unlock() error {
 			e.locked = false
 			return nil
 		}
-		return fmt.Errorf("failed to unlock fd %q: %+v", e.fd, err)
+		return fmt.Errorf("failed to unlock fd %d: %+v", e.fd, err)
 	}
 	return nil
 

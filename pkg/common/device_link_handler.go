@@ -175,7 +175,7 @@ func (dl *DeviceLinkHandler) UpdateDeviceLinks(ctx context.Context, existing *v1
 		klog.Info(infoUpdate)
 		ownerObj, _ := dl.resolveOwnerObjectFromLVDL(ctx, copyToUpdate)
 		if ownerObj != nil {
-			dl.recorder.Eventf(ownerObj, corev1.EventTypeNormal, "PreferredSymlinkChanged", infoUpdate)
+			dl.recorder.Eventf(ownerObj, corev1.EventTypeNormal, "PreferredSymlinkChanged", "%s", infoUpdate)
 		}
 	}
 

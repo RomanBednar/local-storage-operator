@@ -55,6 +55,6 @@ func (reporter *eventReporter) recordEvent(obj runtime.Object, e diskmaker.DiskE
 	if len(nodeName) != 0 {
 		message = fmt.Sprintf("%s - %s", nodeName, message)
 	}
-	reporter.eventRecorder.Eventf(obj, e.EventType, e.EventReason, message)
+	reporter.eventRecorder.Eventf(obj, e.EventType, e.EventReason, "%s", message)
 
 }

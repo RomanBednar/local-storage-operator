@@ -254,7 +254,7 @@ func SyncPVAndLVDL(ctx context.Context, args SyncPVAndLVDLArgs) error {
 			*existingPV.Spec.VolumeMode == corev1.PersistentVolumeBlock && actualVolumeMode == corev1.PersistentVolumeFilesystem {
 			err := fmt.Errorf("PV requires block mode but path was in fs mode")
 			klog.ErrorS(err, "incorrect VolumeMode", "pvName", pvName, "symLinkPath", symLinkPath)
-			runtimeConfig.Recorder.Eventf(existingPV, corev1.EventTypeWarning, provCommon.EventVolumeFailedDelete, err.Error())
+			runtimeConfig.Recorder.Eventf(existingPV, corev1.EventTypeWarning, provCommon.EventVolumeFailedDelete, "%s", err.Error())
 		}
 
 		// replace labels if and only if they don't already exist
