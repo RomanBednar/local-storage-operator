@@ -126,12 +126,8 @@ func main() {
 
 	tlsProfile, err := lsotls.FetchAPIServerTLSProfile(ctx, configClient)
 	if err != nil {
-		if adherence == configv1.TLSAdherencePolicyStrictAllComponents {
-			klog.ErrorS(err, "failed to fetch TLS profile in strict adherence mode")
-			os.Exit(1)
-		}
-		klog.Warningf("failed to fetch TLS profile, using controller-runtime defaults: %v", err)
-		tlsProfile = configv1.TLSProfileSpec{}
+		klog.ErrorS(err, "failed to fetch TLS profile")
+		os.Exit(1)
 	}
 
 	var tlsConfigFn func(*tls.Config)
