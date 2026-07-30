@@ -18,18 +18,16 @@ package tls
 
 import (
 	"context"
-	"os"
 
 	configv1 "github.com/openshift/api/config/v1"
 	crcommon "github.com/openshift/controller-runtime-common/pkg/tls"
 	"k8s.io/klog/v2"
 )
 
-// NewSecurityProfileWatcher creates a SecurityProfileWatcher that triggers operator
-// restart when TLS profile or adherence policy changes.
-// The initial TLS profile spec and adherence policy are passed in so the watcher
-// knows the baseline configuration from operator startup.
+// NewSecurityProfileWatcher creates a SecurityProfileWatcher that triggers a
+// graceful shutdown via cancel when TLS profile or adherence policy changes.
 func NewSecurityProfileWatcher(
+	cancel context.CancelFunc,
 	initialProfile configv1.TLSProfileSpec,
 	initialAdherence configv1.TLSAdherencePolicy,
 ) *crcommon.SecurityProfileWatcher {
@@ -39,12 +37,12 @@ func NewSecurityProfileWatcher(
 		OnProfileChange: func(ctx context.Context, oldProfile, newProfile configv1.TLSProfileSpec) {
 			klog.Infof("TLS profile changed, restarting operator to apply new configuration")
 			klog.V(2).Infof("Old profile: %+v, New profile: %+v", oldProfile, newProfile)
-			os.Exit(0) // Kubernetes will restart the pod
+			cancel()
 		},
 		OnAdherencePolicyChange: func(ctx context.Context, oldPolicy, newPolicy configv1.TLSAdherencePolicy) {
 			klog.Infof("TLS adherence policy changed from %s to %s, restarting operator",
 				oldPolicy, newPolicy)
-			os.Exit(0)
+			cancel()
 		},
 	}
 }

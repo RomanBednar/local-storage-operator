@@ -31,6 +31,8 @@ import (
 	"k8s.io/klog/v2"
 
 	configv1 "github.com/openshift/api/config/v1"
+	crcommon "github.com/openshift/controller-runtime-common/pkg/tls"
+	libcrypto "github.com/openshift/library-go/pkg/crypto"
 	localv1 "github.com/openshift/local-storage-operator/api/v1"
 	localv1alpha1 "github.com/openshift/local-storage-operator/api/v1alpha1"
 	"github.com/openshift/local-storage-operator/pkg/common"
@@ -107,10 +109,11 @@ func main() {
 	restConfig := ctrl.GetConfigOrDie()
 	le := utils.GetLeaderElectionConfig(restConfig, enableLeaderElection)
 
-	// Fetch TLS profile and adherence once at startup to ensure consistency
-	// Use a timeout to prevent indefinite stalls on API server outages
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 	defer cancel()
+
+	startupCtx, startupCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer startupCancel()
 
 	configClient, err := client.New(restConfig, client.Options{Scheme: scheme})
 	if err != nil {
@@ -118,37 +121,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	adherence, err := lsotls.GetAdherencePolicyForLogging(ctx, configClient)
+	adherence, err := crcommon.FetchAPIServerTLSAdherencePolicy(startupCtx, configClient)
 	if err != nil {
 		klog.ErrorS(err, "failed to fetch TLS adherence policy")
 		os.Exit(1)
 	}
+	klog.Infof("TLS adherence policy: %s", adherence)
 
-	tlsProfile, err := lsotls.FetchAPIServerTLSProfile(ctx, configClient)
+	tlsProfile, err := crcommon.FetchAPIServerTLSProfile(startupCtx, configClient)
 	if err != nil {
 		klog.ErrorS(err, "failed to fetch TLS profile")
 		os.Exit(1)
 	}
 
 	var tlsConfigFn func(*tls.Config)
-	if tlsProfile.Ciphers != nil || tlsProfile.MinTLSVersion != "" {
+	if libcrypto.ShouldHonorClusterTLSProfile(adherence) {
+		klog.Infof("Cluster TLS profile adherence is active, applying cluster TLS configuration")
 		var unsupportedCiphers []string
-		tlsConfigFn, unsupportedCiphers = lsotls.GetTLSConfigFromProfile(tlsProfile)
+		tlsConfigFn, unsupportedCiphers = crcommon.NewTLSConfigFromProfile(tlsProfile)
 		if len(unsupportedCiphers) > 0 {
 			klog.Warningf("TLS profile contains %d unsupported cipher suites: %v",
 				len(unsupportedCiphers), unsupportedCiphers)
 		}
-		klog.Infof("TLS config function created successfully")
 	} else {
-		klog.Infof("TLS profile has no ciphers or minVersion, using controller-runtime defaults")
+		klog.Infof("Cluster TLS profile adherence is not active, applying default Intermediate profile")
+		defaultProfile := configv1.TLSProfileSpec{
+			Ciphers:       crcommon.DefaultTLSCiphers,
+			MinTLSVersion: crcommon.DefaultMinTLSVersion,
+		}
+		tlsConfigFn, _ = crcommon.NewTLSConfigFromProfile(defaultProfile)
 	}
 
 	metricsOpts := metricsserver.Options{
 		BindAddress:   metricsAddr,
 		SecureServing: true,
-	}
-	if tlsConfigFn != nil {
-		metricsOpts.TLSOpts = []func(*tls.Config){tlsConfigFn}
+		TLSOpts:       []func(*tls.Config){tlsConfigFn},
 	}
 
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
@@ -202,7 +209,7 @@ func main() {
 	}
 
 	// Setup TLS security profile watcher to restart operator on TLS profile/adherence changes
-	tlsWatcher := lsotls.NewSecurityProfileWatcher(tlsProfile, adherence)
+	tlsWatcher := lsotls.NewSecurityProfileWatcher(cancel, tlsProfile, adherence)
 	tlsWatcher.Client = mgr.GetClient()
 	if err = tlsWatcher.SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create TLS security profile watcher")
@@ -221,7 +228,7 @@ func main() {
 	}
 
 	klog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		klog.ErrorS(err, "problem running manager")
 		os.Exit(1)
 	}
