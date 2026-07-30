@@ -145,10 +145,7 @@ func main() {
 		}
 	} else {
 		klog.Infof("Cluster TLS profile adherence is not active, applying default Intermediate profile")
-		defaultProfile := configv1.TLSProfileSpec{
-			Ciphers:       crcommon.DefaultTLSCiphers,
-			MinTLSVersion: crcommon.DefaultMinTLSVersion,
-		}
+		defaultProfile, _ := crcommon.GetTLSProfileSpec(nil)
 		tlsConfigFn, _ = crcommon.NewTLSConfigFromProfile(defaultProfile)
 	}
 
