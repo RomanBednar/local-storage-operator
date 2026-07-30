@@ -96,6 +96,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.316.1
 	github.com/onsi/ginkgo/v2 v2.32.0
+	github.com/openshift/controller-runtime-common v0.0.0-20260722095319-fea68df23430
 )
 
 require (

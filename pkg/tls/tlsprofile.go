@@ -2,11 +2,14 @@ package tls
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
 	configlistersv1 "github.com/openshift/client-go/config/listers/config/v1"
+	crcommon "github.com/openshift/controller-runtime-common/pkg/tls"
+	libcrypto "github.com/openshift/library-go/pkg/crypto"
 	libapiserver "github.com/openshift/library-go/pkg/operator/configobserver/apiserver"
 	libevents "github.com/openshift/library-go/pkg/operator/events"
 	"github.com/openshift/library-go/pkg/operator/resourcesynccontroller"
@@ -92,4 +95,45 @@ func (a *apiServerListers) ResourceSyncer() resourcesynccontroller.ResourceSynce
 
 func (a *apiServerListers) PreRunHasSynced() []cache.InformerSynced {
 	return nil
+}
+
+// GetTLSConfigFromProfile returns a function that configures a tls.Config based on
+// the provided TLS profile spec. The returned function is suitable for use with
+// controller-runtime's metricsserver.Options TLSOpts field.
+func GetTLSConfigFromProfile(profileSpec configv1.TLSProfileSpec) (func(*tls.Config), []string) {
+	configFn, unsupportedCiphers := crcommon.NewTLSConfigFromProfile(profileSpec)
+	return configFn, unsupportedCiphers
+}
+
+// ValidateMetricsAccess validates TLS configuration based on the cluster's adherence policy.
+func ValidateMetricsAccess(ctx context.Context, c client.Client) error {
+	adherence, err := crcommon.FetchAPIServerTLSAdherencePolicy(ctx, c)
+	if err != nil {
+		return fmt.Errorf("failed to fetch TLS adherence policy: %w", err)
+	}
+
+	if libcrypto.ShouldHonorClusterTLSProfile(adherence) {
+		profileSpec, err := crcommon.FetchAPIServerTLSProfile(ctx, c)
+		if err != nil {
+			return fmt.Errorf("adherence policy %s requires valid TLS profile: %w", adherence, err)
+		}
+		// Check if profile has any configuration
+		if profileSpec.Ciphers == nil && profileSpec.MinTLSVersion == "" {
+			return fmt.Errorf("adherence policy %s requires explicit TLS profile", adherence)
+		}
+	}
+
+	return nil
+}
+
+// GetAdherencePolicyForLogging returns the current TLS adherence policy for logging purposes.
+// Returns the policy and any error encountered.
+func GetAdherencePolicyForLogging(ctx context.Context, c client.Client) (configv1.TLSAdherencePolicy, error) {
+	return crcommon.FetchAPIServerTLSAdherencePolicy(ctx, c)
+}
+
+// FetchAPIServerTLSProfile fetches the TLS profile spec from the cluster APIServer CR.
+// This is a convenience wrapper around controller-runtime-common's function.
+func FetchAPIServerTLSProfile(ctx context.Context, c client.Client) (configv1.TLSProfileSpec, error) {
+	return crcommon.FetchAPIServerTLSProfile(ctx, c)
 }
